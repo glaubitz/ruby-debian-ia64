@@ -13,11 +13,21 @@ if ! bundle
   if have_header(ffi_header = 'ffi.h')
     true
   elsif have_header(ffi_header = 'ffi/ffi.h')
-    $defs.push(format('-DUSE_HEADER_HACKS'))
+    $defs.push('-DUSE_HEADER_HACKS')
     true
   end and (have_library('ffi') || have_library('libffi'))
 end or
 begin
+  # for https://github.com/ruby/fiddle
+  if bundle && File.exist?("../../bin/extlibs.rb")
+    require "fileutils"
+    require_relative "../../bin/extlibs"
+    extlibs = ExtLibs.new
+    cache_dir = File.expand_path("../../tmp/.download_cache", $srcdir)
+    ext_dir = File.expand_path("../../ext", $srcdir)
+    Dir.glob("#{$srcdir}/libffi-*/").each{|dir| FileUtils.rm_rf(dir)}
+    extlibs.run(["--cache=#{cache_dir}", ext_dir])
+  end
   ver = bundle != false &&
         Dir.glob("#{$srcdir}/libffi-*/")
         .map {|n| File.basename(n)}
@@ -104,8 +114,17 @@ end
 
 if ver
   ver = ver.gsub(/-rc\d+/, '') # If ver contains rc version, just ignored.
-  ver = (ver.split('.') + [0,0])[0,3]
+  ver = (ver.split('.').map(&:to_i) + [0,0])[0,3]
   $defs.push(%{-DRUBY_LIBFFI_MODVERSION=#{ '%d%03d%03d' % ver }})
+  warn "libffi_version: #{ver.join('.')}"
+end
+
+case
+when $mswin, $mingw, (ver && (ver <=> [3, 2]) >= 0)
+  $defs << "-DUSE_FFI_CLOSURE_ALLOC=1"
+when (ver && (ver <=> [3, 2]) < 0)
+else
+  have_func('ffi_closure_alloc', ffi_header)
 end
 
 have_header 'sys/mman.h'
@@ -132,7 +151,7 @@ types.each do |type, signed|
   if /^\#define\s+SIZEOF_#{type}\s+(SIZEOF_(.+)|\d+)/ =~ config
     if size = $2 and size != 'VOIDP'
       size = types.fetch(size) {size}
-      $defs << format("-DTYPE_%s=TYPE_%s", signed||type, size)
+      $defs << "-DTYPE_#{signed||type}=TYPE_#{size}"
     end
     if signed
       check_signedness(type.downcase, "stddef.h")

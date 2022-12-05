@@ -1,4 +1,4 @@
-require File.expand_path('../../spec_helper', __FILE__)
+require_relative '../spec_helper'
 
 describe "A method send" do
   evaluate <<-ruby do
@@ -512,6 +512,15 @@ describe "A method" do
     end
 
     evaluate <<-ruby do
+        def m() end
+      ruby
+
+      m().should be_nil
+      m(*[]).should be_nil
+      m(**{}).should be_nil
+    end
+
+    evaluate <<-ruby do
         def m(*) end
       ruby
 
@@ -527,6 +536,8 @@ describe "A method" do
       m().should == []
       m(1).should == [1]
       m(1, 2, 3).should == [1, 2, 3]
+      m(*[]).should == []
+      m(**{}).should == []
     end
 
     evaluate <<-ruby do
@@ -561,6 +572,8 @@ describe "A method" do
 
       m().should == {}
       m(a: 1, b: 2).should == { a: 1, b: 2 }
+      m(*[]).should == {}
+      m(**{}).should == {}
       lambda { m(2) }.should raise_error(ArgumentError)
     end
 
@@ -1191,7 +1204,7 @@ describe "A method" do
         def m(a, b = nil, c = nil, d, e: nil, **f)
           [a, b, c, d, e, f]
         end
-    ruby
+      ruby
 
       result = m(1, 2)
       result.should == [1, nil, nil, 2, nil, {}]
@@ -1201,6 +1214,19 @@ describe "A method" do
 
       result = m(1, {foo: :bar})
       result.should == [1, nil, nil, {foo: :bar}, nil, {}]
+    end
+  end
+
+  context "assigns keyword arguments from a passed Hash without modifying it" do
+    evaluate <<-ruby do
+        def m(a: nil); a; end
+      ruby
+
+      options = {a: 1}.freeze
+      lambda do
+        m(options).should == 1
+      end.should_not raise_error
+      options.should == {a: 1}
     end
   end
 end

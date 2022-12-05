@@ -2,19 +2,16 @@
 
   marshal.c -
 
-  $Author: naruse $
+  $Author: nagachika $
   created at: Thu Apr 27 16:30:01 JST 1995
 
   Copyright (C) 1993-2007 Yukihiro Matsumoto
 
 **********************************************************************/
 
-#if defined __GNUC__ && __GNUC__ < 3
-# error too old GCC
-#endif
-
-#include "internal.h"
+#include "ruby/ruby.h"
 #include "ruby/io.h"
+#include "internal.h"
 #include "ruby/st.h"
 #include "ruby/util.h"
 #include "encindex.h"
@@ -260,7 +257,7 @@ class2path(VALUE klass)
 }
 
 static void w_long(long, struct dump_arg*);
-static void w_encoding(VALUE encname, struct dump_call_arg *arg);
+static int w_encoding(VALUE encname, struct dump_call_arg *arg);
 static VALUE encoding_name(VALUE obj, struct dump_arg *arg);
 
 static void
@@ -404,8 +401,8 @@ w_float(double d, struct dump_arg *arg)
 	w_cstr("nan", arg);
     }
     else if (d == 0.0) {
-	if (1.0/d < 0) w_cstr("-0", arg);
-	else           w_cstr("0", arg);
+        if (signbit(d)) w_cstr("-0", arg);
+        else            w_cstr("0", arg);
     }
     else {
 	int decpt, sign, digs, len = 0;
@@ -553,14 +550,25 @@ w_uclass(VALUE obj, VALUE super, struct dump_arg *arg)
 
 #define to_be_skipped_id(id) (id == rb_id_encoding() || id == rb_intern("E") || !rb_id2str(id))
 
+struct w_ivar_arg {
+    struct dump_call_arg *dump;
+    st_data_t num_ivar;
+};
+
 static int
 w_obj_each(st_data_t key, st_data_t val, st_data_t a)
 {
     ID id = (ID)key;
     VALUE value = (VALUE)val;
-    struct dump_call_arg *arg = (struct dump_call_arg *)a;
+    struct w_ivar_arg *ivarg = (struct w_ivar_arg *)a;
+    struct dump_call_arg *arg = ivarg->dump;
 
     if (to_be_skipped_id(id)) return ST_CONTINUE;
+    if (!ivarg->num_ivar) {
+        rb_raise(rb_eRuntimeError, "instance variable added to %"PRIsVALUE" instance",
+                 CLASS_OF(arg->obj));
+    }
+    --ivarg->num_ivar;
     w_symbol(ID2SYM(id), arg->arg);
     w_object(value, arg->arg, arg->limit);
     return ST_CONTINUE;
@@ -577,32 +585,37 @@ obj_count_ivars(st_data_t key, st_data_t val, st_data_t a)
 static VALUE
 encoding_name(VALUE obj, struct dump_arg *arg)
 {
-    int encidx = rb_enc_get_index(obj);
-    rb_encoding *enc = 0;
-    st_data_t name;
+    if (rb_enc_capable(obj)) {
+        int encidx = rb_enc_get_index(obj);
+        rb_encoding *enc = 0;
+        st_data_t name;
 
-    if (encidx <= 0 || !(enc = rb_enc_from_index(encidx))) {
-	return Qnil;
-    }
+        if (encidx <= 0 || !(enc = rb_enc_from_index(encidx))) {
+            return Qnil;
+        }
 
-    /* special treatment for US-ASCII and UTF-8 */
-    if (encidx == rb_usascii_encindex()) {
-	return Qfalse;
-    }
-    else if (encidx == rb_utf8_encindex()) {
-	return Qtrue;
-    }
+        /* special treatment for US-ASCII and UTF-8 */
+        if (encidx == rb_usascii_encindex()) {
+            return Qfalse;
+        }
+        else if (encidx == rb_utf8_encindex()) {
+            return Qtrue;
+        }
 
-    if (arg->encodings ?
-	!st_lookup(arg->encodings, (st_data_t)rb_enc_name(enc), &name) :
-	(arg->encodings = st_init_strcasetable(), 1)) {
-	name = (st_data_t)rb_str_new_cstr(rb_enc_name(enc));
-	st_insert(arg->encodings, (st_data_t)rb_enc_name(enc), name);
+        if (arg->encodings ?
+            !st_lookup(arg->encodings, (st_data_t)rb_enc_name(enc), &name) :
+            (arg->encodings = st_init_strcasetable(), 1)) {
+            name = (st_data_t)rb_str_new_cstr(rb_enc_name(enc));
+            st_insert(arg->encodings, (st_data_t)rb_enc_name(enc), name);
+        }
+        return (VALUE)name;
     }
-    return (VALUE)name;
+    else {
+        return Qnil;
+    }
 }
 
-static void
+static int
 w_encoding(VALUE encname, struct dump_call_arg *arg)
 {
     int limit = arg->limit;
@@ -612,11 +625,13 @@ w_encoding(VALUE encname, struct dump_call_arg *arg)
       case Qtrue:
 	w_symbol(ID2SYM(rb_intern("E")), arg->arg);
 	w_object(encname, arg->arg, limit);
+        return 1;
       case Qnil:
-	return;
+	return 0;
     }
     w_symbol(ID2SYM(rb_id_encoding()), arg->arg);
     w_object(encname, arg->arg, limit);
+    return 1;
 }
 
 static st_index_t
@@ -641,12 +656,24 @@ has_ivars(VALUE obj, VALUE encname, VALUE *ivobj)
 }
 
 static void
+w_ivar_each(VALUE obj, st_index_t num, struct dump_call_arg *arg)
+{
+    struct w_ivar_arg ivarg = {arg, num};
+    if (!num) return;
+    rb_ivar_foreach(obj, w_obj_each, (st_data_t)&ivarg);
+    if (ivarg.num_ivar) {
+        rb_raise(rb_eRuntimeError, "instance variable removed from %"PRIsVALUE" instance",
+                 CLASS_OF(arg->obj));
+    }
+}
+
+static void
 w_ivar(st_index_t num, VALUE ivobj, VALUE encname, struct dump_call_arg *arg)
 {
     w_long(num, arg->arg);
-    w_encoding(encname, arg);
+    num -= w_encoding(encname, arg);
     if (ivobj != Qundef) {
-	rb_ivar_foreach(ivobj, w_obj_each, (st_data_t)arg);
+        w_ivar_each(ivobj, num, arg);
     }
 }
 
@@ -657,9 +684,7 @@ w_objivar(VALUE obj, struct dump_call_arg *arg)
 
     rb_ivar_foreach(obj, obj_count_ivars, (st_data_t)&num);
     w_long(num, arg->arg);
-    if (num != 0) {
-        rb_ivar_foreach(obj, w_obj_each, (st_data_t)arg);
-    }
+    w_ivar_each(obj, num, arg);
 }
 
 static void
@@ -678,6 +703,7 @@ w_object(VALUE obj, struct dump_arg *arg, int limit)
     if (limit > 0) limit--;
     c_arg.limit = limit;
     c_arg.arg = arg;
+    c_arg.obj = obj;
 
     if (st_lookup(arg->data, obj, &num)) {
 	w_byte(TYPE_LINK, arg);
@@ -815,6 +841,7 @@ w_object(VALUE obj, struct dump_arg *arg, int limit)
 		char sign = BIGNUM_SIGN(obj) ? '+' : '-';
 		size_t len = BIGNUM_LEN(obj);
 		size_t slen;
+                size_t j;
 		BDIGIT *d = BIGNUM_DIGITS(obj);
 
                 slen = SHORTLEN(len);
@@ -824,7 +851,7 @@ w_object(VALUE obj, struct dump_arg *arg, int limit)
 
 		w_byte(sign, arg);
 		w_long((long)slen, arg);
-		while (len--) {
+                for (j = 0; j < len; j++) {
 #if SIZEOF_BDIGIT > SIZEOF_SHORT
 		    BDIGIT num = *d;
 		    int i;
@@ -832,7 +859,7 @@ w_object(VALUE obj, struct dump_arg *arg, int limit)
 		    for (i=0; i<SIZEOF_BDIGIT; i+=SIZEOF_SHORT) {
 			w_short(num & SHORTMASK, arg);
 			num = SHORTDN(num);
-			if (len == 0 && num == 0) break;
+                        if (j == len - 1 && num == 0) break;
 		    }
 #else
 		    w_short(*d, arg);
@@ -885,7 +912,7 @@ w_object(VALUE obj, struct dump_arg *arg, int limit)
 	    else {
 		w_byte(TYPE_HASH_DEF, arg);
 	    }
-	    w_long(RHASH_SIZE(obj), arg);
+            w_long(rb_hash_size_num(obj), arg);
 	    rb_hash_foreach(obj, hash_each, (st_data_t)&c_arg);
 	    if (!NIL_P(RHASH_IFNONE(obj))) {
 		w_object(RHASH_IFNONE(obj), arg, limit);
@@ -1182,6 +1209,8 @@ r_byte(struct load_arg *arg)
     }
     return c;
 }
+
+NORETURN(static void long_toobig(int size));
 
 static void
 long_toobig(int size)
@@ -1483,7 +1512,12 @@ r_ivar(VALUE obj, int *has_encoding, struct load_arg *arg)
 	    VALUE val = r_object(arg);
 	    int idx = sym2encidx(sym, val);
 	    if (idx >= 0) {
-		rb_enc_associate_index(obj, idx);
+                if (rb_enc_capable(obj)) {
+                    rb_enc_associate_index(obj, idx);
+                }
+                else {
+                    rb_raise(rb_eArgError, "%"PRIsVALUE" is not enc_capable", obj);
+                }
 		if (has_encoding) *has_encoding = TRUE;
 	    }
 	    else {
@@ -1675,13 +1709,13 @@ r_object0(struct load_arg *arg, int *ivp, VALUE extmod)
 	    const char *ptr = RSTRING_PTR(str);
 
 	    if (strcmp(ptr, "nan") == 0) {
-		d = NAN;
+		d = nan("");
 	    }
 	    else if (strcmp(ptr, "inf") == 0) {
-		d = INFINITY;
+		d = HUGE_VAL;
 	    }
 	    else if (strcmp(ptr, "-inf") == 0) {
-		d = -INFINITY;
+		d = -HUGE_VAL;
 	    }
 	    else {
 		char *e;
@@ -1812,9 +1846,8 @@ r_object0(struct load_arg *arg, int *ivp, VALUE extmod)
 	    v = r_entry0(v, idx, arg);
 	    values = rb_ary_new2(len);
 	    {
-		VALUE keywords;
-		int keyword_init = RTEST(rb_struct_s_keyword_init(klass));
-		if (keyword_init) {
+		VALUE keywords = Qfalse;
+		if (RTEST(rb_struct_s_keyword_init(klass))) {
 		    keywords = rb_hash_new();
 		    rb_ary_push(values, keywords);
 		}
@@ -1828,7 +1861,7 @@ r_object0(struct load_arg *arg, int *ivp, VALUE extmod)
 				 rb_class_name(klass),
 				 slot, n);
 		    }
-		    if (keyword_init) {
+		    if (keywords) {
 			rb_hash_aset(keywords, RARRAY_AREF(mem, i), r_object(arg));
 		    }
 		    else {

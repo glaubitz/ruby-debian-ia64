@@ -10,10 +10,10 @@
 # $IPR: httprequest.rb,v 1.64 2003/07/13 17:18:22 gotoyuzo Exp $
 
 require 'uri'
-require 'webrick/httpversion'
-require 'webrick/httpstatus'
-require 'webrick/httputils'
-require 'webrick/cookie'
+require_relative 'httpversion'
+require_relative 'httpstatus'
+require_relative 'httputils'
+require_relative 'cookie'
 
 module WEBrick
 
@@ -226,9 +226,9 @@ module WEBrick
         raise HTTPStatus::BadRequest, "bad URI `#{@unparsed_uri}'."
       end
 
-      if /close/io =~ self["connection"]
+      if /\Aclose\z/io =~ self["connection"]
         @keep_alive = false
-      elsif /keep-alive/io =~ self["connection"]
+      elsif /\Akeep-alive\z/io =~ self["connection"]
         @keep_alive = true
       elsif @http_version < "1.1"
         @keep_alive = false
@@ -255,6 +255,32 @@ module WEBrick
       block ||= Proc.new{|chunk| @body << chunk }
       read_body(@socket, block)
       @body.empty? ? nil : @body
+    end
+
+    ##
+    # Prepares the HTTPRequest object for use as the
+    # source for IO.copy_stream
+
+    def body_reader
+      @body_tmp = []
+      @body_rd = Fiber.new do
+        body do |buf|
+          @body_tmp << buf
+          Fiber.yield
+        end
+      end
+      @body_rd.resume # grab the first chunk and yield
+      self
+    end
+
+    # for IO.copy_stream.  Note: we may return a larger string than +size+
+    # here; but IO.copy_stream does not care.
+    def readpartial(size, buf = ''.b) # :nodoc
+      res = @body_tmp.shift or raise EOFError, 'end of file reached'
+      buf.replace(res)
+      res.clear
+      @body_rd.resume # get more chunks
+      buf
     end
 
     ##
@@ -419,12 +445,14 @@ module WEBrick
 
     def read_request_line(socket)
       @request_line = read_line(socket, MAX_URI_LENGTH) if socket
+      raise HTTPStatus::EOFError unless @request_line
+
       @request_bytes = @request_line.bytesize
       if @request_bytes >= MAX_URI_LENGTH and @request_line[-1, 1] != LF
         raise HTTPStatus::RequestURITooLarge
       end
+
       @request_time = Time.now
-      raise HTTPStatus::EOFError unless @request_line
       if /^(\S+)\s+(\S++)(?:\s+HTTP\/(\d+\.\d+))?\r?\n/mo =~ @request_line
         @request_method = $1
         @unparsed_uri   = $2
@@ -475,7 +503,7 @@ module WEBrick
       return unless socket
       if tc = self['transfer-encoding']
         case tc
-        when /chunked/io then read_chunked(socket, block)
+        when /\Achunked\z/io then read_chunked(socket, block)
         else raise HTTPStatus::NotImplemented, "Transfer-Encoding: #{tc}."
         end
       elsif self['content-length'] || @remaining_size

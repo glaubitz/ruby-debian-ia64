@@ -1,4 +1,4 @@
-require File.expand_path('../../../spec_helper', __FILE__)
+require_relative '../../spec_helper'
 
 describe "Time#localtime" do
   it "converts self to local time, modifying the receiver" do
@@ -93,7 +93,7 @@ describe "Time#localtime" do
 
     it "does nothing if already in a local time zone" do
       time = with_timezone("America/New_York") do
-        break Time.new(2005, 2, 27, 22, 50, 0)
+        Time.new(2005, 2, 27, 22, 50, 0)
       end
       zone = time.zone
 

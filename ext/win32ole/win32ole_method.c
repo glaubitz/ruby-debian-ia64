@@ -283,7 +283,7 @@ folemethod_initialize(VALUE self, VALUE oletype, VALUE method)
 }
 
 /*
- *  call-seq
+ *  call-seq:
  *     WIN32OLE_METHOD#name
  *
  *  Returns the name of the method.
@@ -922,6 +922,8 @@ folemethod_inspect(VALUE self)
 {
     return default_inspect(self, "WIN32OLE_METHOD");
 }
+
+VALUE cWIN32OLE_METHOD;
 
 void Init_win32ole_method(void)
 {

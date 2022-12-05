@@ -2,7 +2,7 @@
 #
 # tmpdir - retrieve temporary directory path
 #
-# $Id: tmpdir.rb 67241 2019-03-13 00:21:46Z nagachika $
+# $Id: tmpdir.rb 67910 2021-03-02 11:37:36Z usa $
 #
 
 require 'fileutils'
@@ -84,13 +84,13 @@ class Dir
   #
   def self.mktmpdir(prefix_suffix=nil, *rest)
     base = nil
-    path = Tmpname.create(prefix_suffix || "d", *rest) {|_path, _, _, d|
+    path = Tmpname.create(prefix_suffix || "d", *rest) {|path, _, _, d|
       base = d
-      mkdir(_path, 0700)
+      mkdir(path, 0700)
     }
     if block_given?
       begin
-        yield path
+        yield path.dup
       ensure
         unless base
           stat = File.stat(File.dirname(path))

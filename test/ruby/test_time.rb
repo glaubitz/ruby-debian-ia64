@@ -556,6 +556,10 @@ class TestTime < Test::Unit::TestCase
 
   def test_zone
     assert_zone_encoding Time.now
+    t = Time.now.utc
+    assert_equal("UTC", t.zone)
+    assert_nil(t.getlocal(0).zone)
+    assert_nil(t.getlocal("+02:00").zone)
   end
 
   def test_plus_minus_succ
@@ -847,6 +851,13 @@ class TestTime < Test::Unit::TestCase
     assert_equal(8192, Time.now.strftime('%8192z').size)
   end
 
+  def test_strftime_wide_precision
+    t2000 = get_t2000
+    s = t2000.strftime("%28c")
+    assert_equal(28, s.size)
+    assert_equal(t2000.strftime("%c"), s.strip)
+  end
+
   def test_strfimte_zoneoffset
     t2000 = get_t2000
     t = t2000.getlocal("+09:00:00")
@@ -1097,6 +1108,14 @@ class TestTime < Test::Unit::TestCase
     }
   end
 
+  def test_getlocal_utc_offset
+    t = Time.gm(2000)
+    assert_equal [00, 30, 21, 31, 12, 1999], t.getlocal("-02:30").to_a[0, 6]
+    assert_equal [00, 00,  9,  1,  1, 2000], t.getlocal("+09:00").to_a[0, 6]
+    assert_equal [20, 29, 21, 31, 12, 1999], t.getlocal("-02:30:40").to_a[0, 6]
+    assert_equal [35, 10,  9,  1,  1, 2000], t.getlocal("+09:10:35").to_a[0, 6]
+  end
+
   def test_getlocal_nil
     now = Time.now
     now2 = nil
@@ -1127,14 +1146,19 @@ class TestTime < Test::Unit::TestCase
   end
 
   def test_strftime_no_hidden_garbage
+    skip unless Thread.list.size == 1
+
     fmt = %w(Y m d).map { |x| "%#{x}" }.join('-') # defeats optimization
     t = Time.at(0).getutc
     ObjectSpace.count_objects(res = {}) # creates strings on first call
+    GC.disable
     before = ObjectSpace.count_objects(res)[:T_STRING]
     val = t.strftime(fmt)
     after = ObjectSpace.count_objects(res)[:T_STRING]
     assert_equal before + 1, after, 'only new string is the created one'
     assert_equal '1970-01-01', val
+  ensure
+    GC.enable
   end
 
   def test_num_exact_error
@@ -1156,6 +1180,7 @@ class TestTime < Test::Unit::TestCase
     case size
     when 20 then expect = 50
     when 40 then expect = 86
+    when 48 then expect = 94
     else
       flunk "Unsupported RVALUE_SIZE=#{size}, update test_memsize"
     end

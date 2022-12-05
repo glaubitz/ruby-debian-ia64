@@ -16,7 +16,6 @@ class TestUltraLightParser < Test::Unit::TestCase
                        nil,
                        [:entitydecl, "name", "value"]
                      ],
-                     [:text, "\n"],
                      [:start_element, :parent, "root", {}],
                      [:text, "\n"],
                    ],
@@ -55,7 +54,7 @@ class TestUltraLightParser < Test::Unit::TestCase
         normalized_doctype[1] = normalized_parent
         normalized_doctype
       when :start_element
-        tag, parent, name, attributes, *children = child
+        tag, _parent, name, attributes, *children = child
         normalized_parent = :parent
         normalized_children = children.collect do |sub_child|
           normalize_child(sub_child)

@@ -2,27 +2,29 @@
 
   transcode.c -
 
-  $Author: nagachika $
+  $Author: usa $
   created at: Tue Oct 30 16:10:22 JST 2007
 
   Copyright (C) 2007 Martin Duerst
 
 **********************************************************************/
 
+#include "ruby/encoding.h"
 #include "internal.h"
 #include "transcode_data.h"
+#include "id.h"
 #include <ctype.h>
 
 #define ENABLE_ECONV_NEWLINE_OPTION 1
 
 /* VALUE rb_cEncoding = rb_define_class("Encoding", rb_cObject); */
-VALUE rb_eUndefinedConversionError;
-VALUE rb_eInvalidByteSequenceError;
-VALUE rb_eConverterNotFoundError;
+static VALUE rb_eUndefinedConversionError;
+static VALUE rb_eInvalidByteSequenceError;
+static VALUE rb_eConverterNotFoundError;
 
 VALUE rb_cEncodingConverter;
 
-static VALUE sym_invalid, sym_undef, sym_replace, sym_fallback, sym_aref;
+static VALUE sym_invalid, sym_undef, sym_replace, sym_fallback;
 static VALUE sym_xml, sym_text, sym_attr;
 static VALUE sym_universal_newline;
 static VALUE sym_crlf_newline;
@@ -368,14 +370,13 @@ load_transcoder_entry(transcoder_entry_t *entry)
         const size_t total_len = sizeof(transcoder_lib_prefix) - 1 + len;
         const VALUE fn = rb_str_new(0, total_len);
         char *const path = RSTRING_PTR(fn);
-	const int safe = rb_safe_level();
 
         memcpy(path, transcoder_lib_prefix, sizeof(transcoder_lib_prefix) - 1);
         memcpy(path + sizeof(transcoder_lib_prefix) - 1, lib, len);
         rb_str_set_len(fn, total_len);
         FL_UNSET(fn, FL_TAINT);
         OBJ_FREEZE(fn);
-        rb_require_safe(fn, safe > 3 ? 3 : safe);
+        rb_require_safe(fn, rb_safe_level());
     }
 
     if (entry->transcoder)
@@ -2256,7 +2257,7 @@ method_fallback(VALUE fallback, VALUE c)
 static VALUE
 aref_fallback(VALUE fallback, VALUE c)
 {
-    return rb_funcall3(fallback, sym_aref, 1, &c);
+    return rb_funcallv_public(fallback, idAREF, 1, &c);
 }
 
 static void
@@ -2550,7 +2551,7 @@ rb_econv_prepare_options(VALUE opthash, VALUE *opts, int ecflags)
     if (!NIL_P(v)) {
 	VALUE h = rb_check_hash_type(v);
 	if (NIL_P(h)
-	    ? (rb_obj_is_proc(v) || rb_obj_is_method(v) || rb_respond_to(v, sym_aref))
+	    ? (rb_obj_is_proc(v) || rb_obj_is_method(v) || rb_respond_to(v, idAREF))
 	    : (v = h, 1)) {
 	    if (NIL_P(newhash))
 		newhash = rb_hash_new();
@@ -2905,6 +2906,11 @@ encoded_dup(VALUE newstr, VALUE str, int encidx)
     return str_encode_associate(newstr, encidx);
 }
 
+/*
+ * Document-class: Encoding::Converter
+ *
+ * Encoding conversion class.
+ */
 static void
 econv_free(void *ptr)
 {
@@ -3151,10 +3157,10 @@ econv_s_search_convpath(int argc, VALUE *argv, VALUE klass)
     transcode_search_path(sname, dname, search_convpath_i, &convpath);
 
     if (NIL_P(convpath)) {
-	VALUE exc = rb_econv_open_exc(sname, dname, ecflags);
-	RB_GC_GUARD(snamev);
-	RB_GC_GUARD(dnamev);
-	rb_exc_raise(exc);
+        VALUE exc = rb_econv_open_exc(sname, dname, ecflags);
+        RB_GC_GUARD(snamev);
+        RB_GC_GUARD(dnamev);
+        rb_exc_raise(exc);
     }
 
     if (decorate_convpath(convpath, ecflags) == -1) {
@@ -4079,7 +4085,7 @@ econv_insert_output(VALUE self, VALUE string)
 }
 
 /*
- * call-seq
+ * call-seq:
  *   ec.putback                    -> string
  *   ec.putback(max_numbytes)      -> string
  *
@@ -4110,10 +4116,9 @@ econv_putback(int argc, VALUE *argv, VALUE self)
     int putbackable;
     VALUE str, max;
 
-    rb_scan_args(argc, argv, "01", &max);
-
-    if (NIL_P(max))
+    if (!rb_check_arity(argc, 0, 1) || NIL_P(max = argv[0])) {
         n = rb_econv_putbackable(ec);
+    }
     else {
         n = NUM2INT(max);
         putbackable = rb_econv_putbackable(ec);
@@ -4420,7 +4425,6 @@ Init_transcode(void)
     sym_undef = ID2SYM(rb_intern("undef"));
     sym_replace = ID2SYM(rb_intern("replace"));
     sym_fallback = ID2SYM(rb_intern("fallback"));
-    sym_aref = ID2SYM(rb_intern("[]"));
     sym_xml = ID2SYM(rb_intern("xml"));
     sym_text = ID2SYM(rb_intern("text"));
     sym_attr = ID2SYM(rb_intern("attr"));

@@ -1,8 +1,9 @@
-/* A Bison parser, made by GNU Bison 3.0.4.  */
+/* A Bison parser, made by GNU Bison 3.5.1.  */
 
 /* Bison interface for Yacc-like parsers in C
 
-   Copyright (C) 1984, 1989-1990, 2000-2015 Free Software Foundation, Inc.
+   Copyright (C) 1984, 1989-1990, 2000-2015, 2018-2020 Free Software Foundation,
+   Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -29,6 +30,9 @@
 
    This special exception was added by the Free Software Foundation in
    version 2.2 of Bison.  */
+
+/* Undocumented macros, especially those whose name start with YY_,
+   are private implementation details.  Do not rely on them.  */
 
 #ifndef YY_YY_Y_TAB_H_INCLUDED
 # define YY_YY_Y_TAB_H_INCLUDED
@@ -111,6 +115,7 @@ extern int yydebug;
     tNTH_REF = 320,
     tBACK_REF = 321,
     tREGEXP_END = 322,
+    tSP = 323,
     tUPLUS = 130,
     tUMINUS = 131,
     tPOW = 132,
@@ -132,42 +137,41 @@ extern int yydebug;
     tRSHFT = 135,
     tANDDOT = 148,
     tCOLON2 = 145,
-    tCOLON3 = 323,
-    tOP_ASGN = 324,
-    tASSOC = 325,
-    tLPAREN = 326,
-    tLPAREN_ARG = 327,
-    tRPAREN = 328,
-    tLBRACK = 329,
-    tLBRACE = 330,
-    tLBRACE_ARG = 331,
-    tSTAR = 332,
-    tDSTAR = 333,
-    tAMPER = 334,
-    tLAMBDA = 335,
-    tSYMBEG = 336,
-    tSTRING_BEG = 337,
-    tXSTRING_BEG = 338,
-    tREGEXP_BEG = 339,
-    tWORDS_BEG = 340,
-    tQWORDS_BEG = 341,
-    tSYMBOLS_BEG = 342,
-    tQSYMBOLS_BEG = 343,
-    tSTRING_DBEG = 344,
-    tSTRING_DEND = 345,
-    tSTRING_DVAR = 346,
-    tSTRING_END = 347,
-    tLAMBEG = 348,
-    tLABEL_END = 349,
-    tLOWEST = 350,
-    tUMINUS_NUM = 351,
-    tLAST_TOKEN = 352
+    tCOLON3 = 324,
+    tOP_ASGN = 325,
+    tASSOC = 326,
+    tLPAREN = 327,
+    tLPAREN_ARG = 328,
+    tRPAREN = 329,
+    tLBRACK = 330,
+    tLBRACE = 331,
+    tLBRACE_ARG = 332,
+    tSTAR = 333,
+    tDSTAR = 334,
+    tAMPER = 335,
+    tLAMBDA = 336,
+    tSYMBEG = 337,
+    tSTRING_BEG = 338,
+    tXSTRING_BEG = 339,
+    tREGEXP_BEG = 340,
+    tWORDS_BEG = 341,
+    tQWORDS_BEG = 342,
+    tSYMBOLS_BEG = 343,
+    tQSYMBOLS_BEG = 344,
+    tSTRING_DBEG = 345,
+    tSTRING_DEND = 346,
+    tSTRING_DVAR = 347,
+    tSTRING_END = 348,
+    tLAMBEG = 349,
+    tLABEL_END = 350,
+    tLOWEST = 351,
+    tUMINUS_NUM = 352,
+    tLAST_TOKEN = 353
   };
 #endif
 
 /* Value type.  */
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
-
 union YYSTYPE
 {
 
@@ -178,8 +182,8 @@ union YYSTYPE
     const struct vtable *vars;
     struct rb_strterm_struct *strterm;
 
-};
 
+};
 typedef union YYSTYPE YYSTYPE;
 # define YYSTYPE_IS_TRIVIAL 1
 # define YYSTYPE_IS_DECLARED 1
@@ -201,6 +205,6 @@ struct YYLTYPE
 
 
 
-int yyparse (struct parser_params *parser);
+int yyparse (struct parser_params *p);
 
 #endif /* !YY_YY_Y_TAB_H_INCLUDED  */

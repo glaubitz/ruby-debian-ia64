@@ -2,7 +2,7 @@
 
   class.c -
 
-  $Author: nobu $
+  $Author: usa $
   created at: Tue Aug 10 15:05:44 JST 1993
 
   Copyright (C) 1993-2007 Yukihiro Matsumoto
@@ -31,6 +31,9 @@
 #include <ctype.h>
 
 #define id_attached id__attached__
+
+#define METACLASS_OF(k) RBASIC(k)->klass
+#define SET_METACLASS_OF(k, cls) RBASIC_SET_CLASS(k, cls)
 
 void
 rb_class_subclass_add(VALUE super, VALUE klass)
@@ -367,22 +370,35 @@ rb_singleton_class_clone(VALUE obj)
     return rb_singleton_class_clone_and_attach(obj, Qundef);
 }
 
+// Clone and return the singleton class of `obj` if it has been created and is attached to `obj`.
 VALUE
 rb_singleton_class_clone_and_attach(VALUE obj, VALUE attach)
 {
     const VALUE klass = RBASIC(obj)->klass;
 
-    if (!FL_TEST(klass, FL_SINGLETON))
-	return klass;
+    // Note that `rb_singleton_class()` can create situations where `klass` is
+    // attached to an object other than `obj`. In which case `obj` does not have
+    // a material singleton class attached yet and there is no singleton class
+    // to clone.
+    if (!(FL_TEST(klass, FL_SINGLETON) && rb_attr_get(klass, id_attached) == obj)) {
+        // nothing to clone
+        return klass;
+    }
     else {
 	/* copy singleton(unnamed) class */
+        bool klass_of_clone_is_new;
 	VALUE clone = class_alloc(RBASIC(klass)->flags, 0);
 
 	if (BUILTIN_TYPE(obj) == T_CLASS) {
+            klass_of_clone_is_new = true;
 	    RBASIC_SET_CLASS(clone, clone);
 	}
 	else {
-	    RBASIC_SET_CLASS(clone, rb_singleton_class_clone(klass));
+            VALUE klass_metaclass_clone = rb_singleton_class_clone(klass);
+            // When `METACLASS_OF(klass) == klass_metaclass_clone`, it means the
+            // recursive call did not clone `METACLASS_OF(klass)`.
+            klass_of_clone_is_new = (METACLASS_OF(klass) != klass_metaclass_clone);
+            RBASIC_SET_CLASS(clone, klass_metaclass_clone);
 	}
 
 	RCLASS_SET_SUPER(clone, RCLASS_SUPER(klass));
@@ -406,7 +422,9 @@ rb_singleton_class_clone_and_attach(VALUE obj, VALUE attach)
 	    arg.new_klass = clone;
 	    rb_id_table_foreach(RCLASS_M_TBL(klass), clone_method_i, &arg);
 	}
-	rb_singleton_class_attached(RBASIC(clone)->klass, clone);
+        if (klass_of_clone_is_new) {
+            rb_singleton_class_attached(RBASIC(clone)->klass, clone);
+        }
 	FL_SET(clone, FL_SINGLETON);
 
 	return clone;
@@ -427,11 +445,6 @@ rb_singleton_class_attached(VALUE klass, VALUE obj)
 	rb_class_ivar_set(klass, id_attached, obj);
     }
 }
-
-
-
-#define METACLASS_OF(k) RBASIC(k)->klass
-#define SET_METACLASS_OF(k, cls) RBASIC_SET_CLASS(k, cls)
 
 /*!
  * whether k is a meta^(n)-class of Class class
@@ -616,7 +629,7 @@ rb_define_class_id(ID id, VALUE super)
  * \return the value \c Class#inherited's returns
  * \pre Each of \a super and \a klass must be a \c Class object.
  */
-VALUE
+MJIT_FUNC_EXPORTED VALUE
 rb_class_inherited(VALUE super, VALUE klass)
 {
     ID inherited;
@@ -852,7 +865,7 @@ static int include_modules_at(const VALUE klass, VALUE c, VALUE module, int sear
 static void
 ensure_includable(VALUE klass, VALUE module)
 {
-    rb_frozen_class_p(klass);
+    rb_class_modify_check(klass);
     Check_Type(module, T_MODULE);
     if (!NIL_P(rb_refinement_module_get_refined_class(module))) {
 	rb_raise(rb_eArgError, "refinement module is not allowed");
@@ -1178,17 +1191,10 @@ static VALUE
 class_instance_method_list(int argc, const VALUE *argv, VALUE mod, int obj, int (*func) (st_data_t, st_data_t, st_data_t))
 {
     VALUE ary;
-    int recur, prepended = 0;
+    int recur = TRUE, prepended = 0;
     struct method_entry_arg me_arg;
 
-    if (argc == 0) {
-	recur = TRUE;
-    }
-    else {
-	VALUE r;
-	rb_scan_args(argc, argv, "01", &r);
-	recur = RTEST(r);
-    }
+    if (rb_check_arity(argc, 0, 1)) recur = RTEST(argv[0]);
 
     if (!recur && RCLASS_ORIGIN(mod) != mod) {
 	mod = RCLASS_ORIGIN(mod);
@@ -1417,25 +1423,21 @@ rb_obj_public_methods(int argc, const VALUE *argv, VALUE obj)
 VALUE
 rb_obj_singleton_methods(int argc, const VALUE *argv, VALUE obj)
 {
-    VALUE recur, ary, klass, origin;
+    VALUE ary, klass, origin;
     struct method_entry_arg me_arg;
     struct rb_id_table *mtbl;
+    int recur = TRUE;
 
-    if (argc == 0) {
-	recur = Qtrue;
-    }
-    else {
-	rb_scan_args(argc, argv, "01", &recur);
-    }
+    if (rb_check_arity(argc, 0, 1)) recur = RTEST(argv[0]);
     klass = CLASS_OF(obj);
     origin = RCLASS_ORIGIN(klass);
     me_arg.list = st_init_numtable();
-    me_arg.recur = RTEST(recur);
+    me_arg.recur = recur;
     if (klass && FL_TEST(klass, FL_SINGLETON)) {
 	if ((mtbl = RCLASS_M_TBL(origin)) != 0) rb_id_table_foreach(mtbl, method_entry_i, &me_arg);
 	klass = RCLASS_SUPER(klass);
     }
-    if (RTEST(recur)) {
+    if (recur) {
 	while (klass && (FL_TEST(klass, FL_SINGLETON) || RB_TYPE_P(klass, T_ICLASS))) {
 	    if (klass != origin && (mtbl = RCLASS_M_TBL(klass)) != 0) rb_id_table_foreach(mtbl, method_entry_i, &me_arg);
 	    klass = RCLASS_SUPER(klass);
@@ -1773,17 +1775,16 @@ rb_define_attr(VALUE klass, const char *name, int read, int write)
     rb_attr(klass, rb_intern(name), read, write, FALSE);
 }
 
-VALUE
+MJIT_FUNC_EXPORTED VALUE
 rb_keyword_error_new(const char *error, VALUE keys)
 {
-    const VALUE *ptr = RARRAY_CONST_PTR(keys);
     long i = 0, len = RARRAY_LEN(keys);
     VALUE error_message = rb_sprintf("%s keyword%.*s", error, len > 1, "s");
 
     if (len > 0) {
 	rb_str_cat_cstr(error_message, ": ");
 	while (1) {
-	    const VALUE k = ptr[i];
+            const VALUE k = RARRAY_AREF(keys, i);
 	    Check_Type(k, T_SYMBOL); /* wrong hash is given to rb_get_kwargs */
 	    rb_str_append(error_message, rb_sym2str(k));
 	    if (++i >= len) break;
@@ -1805,20 +1806,19 @@ NORETURN(static void unknown_keyword_error(VALUE hash, const ID *table, int keyw
 static void
 unknown_keyword_error(VALUE hash, const ID *table, int keywords)
 {
-    st_table *tbl = rb_hash_tbl_raw(hash);
     int i;
     for (i = 0; i < keywords; i++) {
 	st_data_t key = ID2SYM(table[i]);
-	st_delete(tbl, &key, NULL);
+        rb_hash_stlike_delete(hash, &key, NULL);
     }
     rb_keyword_error("unknown", rb_hash_keys(hash));
 }
+
 
 static int
 separate_symbol(st_data_t key, st_data_t value, st_data_t arg)
 {
     VALUE *kwdhash = (VALUE *)arg;
-
     if (!SYMBOL_P(key)) kwdhash++;
     if (!*kwdhash) *kwdhash = rb_hash_new();
     rb_hash_aset(*kwdhash, (VALUE)key, (VALUE)value);
@@ -1835,7 +1835,7 @@ rb_extract_keywords(VALUE *orighash)
 	*orighash = 0;
 	return hash;
     }
-    st_foreach(rb_hash_tbl_raw(hash), separate_symbol, (st_data_t)&parthash);
+    rb_hash_foreach(hash, separate_symbol, (st_data_t)&parthash);
     *orighash = parthash[1];
     if (parthash[1] && RBASIC_CLASS(hash) != rb_cHash) {
 	RBASIC_SET_CLASS(parthash[1], RBASIC_CLASS(hash));
@@ -1853,8 +1853,8 @@ rb_get_kwargs(VALUE keyword_hash, const ID *table, int required, int optional, V
 
 #define extract_kwarg(keyword, val) \
     (key = (st_data_t)(keyword), values ? \
-     st_delete(rb_hash_tbl_raw(keyword_hash), &key, (val)) : \
-     st_lookup(rb_hash_tbl_raw(keyword_hash), key, (val)))
+     rb_hash_stlike_delete(keyword_hash, &key, (val)) : \
+     rb_hash_stlike_lookup(keyword_hash, key, (val)))
 
     if (NIL_P(keyword_hash)) keyword_hash = 0;
 
