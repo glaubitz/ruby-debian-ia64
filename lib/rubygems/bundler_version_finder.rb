@@ -1,5 +1,8 @@
-module Gem::BundlerVersionFinder
+# frozen_string_literal: true
 
+require "rubygems/util"
+
+module Gem::BundlerVersionFinder
   def self.bundler_version
     version, _ = bundler_version_with_reason
 
@@ -84,9 +87,9 @@ To install the missing version, run `gem install bundler:#{vr.first}`
     return unless gemfile
 
     lockfile = case gemfile
-    when "gems.rb" then "gems.locked"
-    else "#{gemfile}.lock"
-    end.untaint
+               when "gems.rb" then "gems.locked"
+               else "#{gemfile}.lock"
+               end.dup.untaint
 
     return unless File.file?(lockfile)
 

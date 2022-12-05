@@ -458,6 +458,14 @@ class TestMethod < Test::Unit::TestCase
 
     m.taint
     assert_predicate(m.inspect, :tainted?, "inspect result should be infected")
+
+    bug15608 = '[ruby-core:91570] [Bug #15608]'
+    c4 = Class.new(c)
+    c4.class_eval { alias bar foo }
+    o = c4.new
+    o.singleton_class
+    m4 = o.method(:bar)
+    assert_equal("#<Method: #{c4.inspect}(#{c.inspect})#bar(foo)>", m4.inspect, bug15608)
   end
 
   def test_callee_top_level
@@ -950,6 +958,99 @@ class TestMethod < Test::Unit::TestCase
       '[ruby-core:85231] [Bug #14421]'
   end
 
+  def test_super_method_alias
+    c0 = Class.new do
+      def m1
+        [:C0_m1]
+      end
+      def m2
+        [:C0_m2]
+      end
+    end
+
+    c1 = Class.new(c0) do
+      def m1
+        [:C1_m1] + super
+      end
+      alias m2 m1
+    end
+
+    c2 = Class.new(c1) do
+      def m2
+        [:C2_m2] + super
+      end
+    end
+    o1 = c2.new
+    assert_equal([:C2_m2, :C1_m1, :C0_m1], o1.m2)
+
+    m = o1.method(:m2)
+    assert_equal([:C2_m2, :C1_m1, :C0_m1], m.call)
+
+    m = m.super_method
+    assert_equal([:C1_m1, :C0_m1], m.call)
+
+    m = m.super_method
+    assert_equal([:C0_m1], m.call)
+
+    assert_nil(m.super_method)
+  end
+
+  def test_super_method_alias_to_prepended_module
+    m = Module.new do
+      def m1
+        [:P_m1] + super
+      end
+
+      def m2
+        [:P_m2] + super
+      end
+    end
+
+    c0 = Class.new do
+      def m1
+        [:C0_m1]
+      end
+    end
+
+    c1 = Class.new(c0) do
+      def m1
+        [:C1_m1] + super
+      end
+      prepend m
+      alias m2 m1
+    end
+
+    o1 = c1.new
+    assert_equal([:P_m2, :P_m1, :C1_m1, :C0_m1], o1.m2)
+
+    m = o1.method(:m2)
+    assert_equal([:P_m2, :P_m1, :C1_m1, :C0_m1], m.call)
+
+    m = m.super_method
+    assert_equal([:P_m1, :C1_m1, :C0_m1], m.call)
+
+    m = m.super_method
+    assert_equal([:C1_m1, :C0_m1], m.call)
+
+    m = m.super_method
+    assert_equal([:C0_m1], m.call)
+
+    assert_nil(m.super_method)
+  end
+
+  # Bug 17780
+  def test_super_method_module_alias
+    m = Module.new do
+      def foo
+      end
+      alias :f :foo
+    end
+
+    method = m.instance_method(:f)
+    super_method = method.super_method
+    assert_nil(super_method)
+  end
+
   def rest_parameter(*rest)
     rest
   end
@@ -1045,5 +1146,56 @@ class TestMethod < Test::Unit::TestCase
   def test_eqq
     assert_operator(0.method(:<), :===, 5)
     assert_not_operator(0.method(:<), :===, -5)
+  end
+
+  def test_compose_with_method
+    c = Class.new {
+      def f(x) x * 2 end
+      def g(x) x + 1 end
+    }
+    f = c.new.method(:f)
+    g = c.new.method(:g)
+
+    assert_equal(6, (f << g).call(2))
+    assert_equal(6, (g >> f).call(2))
+  end
+
+  def test_compose_with_proc
+    c = Class.new {
+      def f(x) x * 2 end
+    }
+    f = c.new.method(:f)
+    g = proc {|x| x + 1}
+
+    assert_equal(6, (f << g).call(2))
+    assert_equal(6, (g >> f).call(2))
+  end
+
+  def test_compose_with_callable
+    c = Class.new {
+      def f(x) x * 2 end
+    }
+    c2 = Class.new {
+      def call(x) x + 1 end
+    }
+    f = c.new.method(:f)
+    g = c2.new
+
+    assert_equal(6, (f << g).call(2))
+    assert_equal(5, (f >> g).call(2))
+  end
+
+  def test_compose_with_noncallable
+    c = Class.new {
+      def f(x) x * 2 end
+    }
+    f = c.new.method(:f)
+
+    assert_raise(NoMethodError) {
+      (f << 5).call(2)
+    }
+    assert_raise(NoMethodError) {
+      (f >> 5).call(2)
+    }
   end
 end

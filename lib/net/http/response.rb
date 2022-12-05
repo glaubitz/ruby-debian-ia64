@@ -262,12 +262,13 @@ class Net::HTTPResponse
 
       begin
         yield inflate_body_io
+        success = true
       ensure
-        orig_err = $!
         begin
           inflate_body_io.finish
         rescue => err
-          raise orig_err || err
+          # Ignore #finish's error if there is an exception from yield
+          raise err if success
         end
       end
     when 'none', 'identity' then
@@ -380,6 +381,7 @@ class Net::HTTPResponse
       end
       block = proc do |compressed_chunk|
         @inflate.inflate(compressed_chunk) do |chunk|
+          compressed_chunk.clear
           dest << chunk
         end
       end

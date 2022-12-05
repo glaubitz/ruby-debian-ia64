@@ -1,5 +1,5 @@
 # frozen_string_literal: false
-# $Id: test_scanfio.rb 67754 2019-08-26 14:18:58Z usa $
+# $Id: test_scanfio.rb 53141 2015-12-16 05:07:31Z naruse $
 #
 # scanf for Ruby
 #
@@ -16,13 +16,6 @@ class TestScanfIO < Test::Unit::TestCase
     assert_equal([33, "little"], fh.scanf("%da fun%s"))
   ensure
     fh.close
-  end
-
-  def test_pipe_scanf
-    r, w = IO.pipe
-    w.write('a')
-    w.close
-    assert_equal([], r.scanf('a'))
   end
 end
 

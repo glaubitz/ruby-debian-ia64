@@ -127,6 +127,24 @@ class IMAPTest < Test::Unit::TestCase
         imap.disconnect
       end
     end
+
+    def test_starttls_stripping
+      starttls_stripping_test do |port|
+        imap = Net::IMAP.new("localhost", :port => port)
+        assert_raise(Net::IMAP::UnknownResponseError) do
+          imap.starttls(:ca_file => CA_FILE)
+        end
+        imap
+      end
+    end
+  end
+
+  def start_server
+    th = Thread.new do
+      yield
+    end
+    @threads << th
+    sleep 0.1 until th.stop?
   end
 
   def test_unexpected_eof
@@ -231,7 +249,7 @@ class IMAPTest < Test::Unit::TestCase
         in_idle = false
         exception_raised = false
         c = m.new_cond
-        @threads << Thread.start do
+        raiser = Thread.start do
           m.synchronize do
             until in_idle
               c.wait(0.1)
@@ -243,6 +261,7 @@ class IMAPTest < Test::Unit::TestCase
             c.signal
           end
         end
+        @threads << raiser
         imap.idle do |res|
           m.synchronize do
             in_idle = true
@@ -260,6 +279,7 @@ class IMAPTest < Test::Unit::TestCase
       imap.logout
     ensure
       imap.disconnect if imap
+      raiser.kill unless in_idle
     end
   end
 
@@ -755,6 +775,27 @@ EOF
     begin
       imap = yield(port)
       imap.logout if !imap.disconnected?
+    ensure
+      imap.disconnect if imap && !imap.disconnected?
+    end
+  end
+
+  def starttls_stripping_test
+    server = create_tcp_server
+    port = server.addr[1]
+    start_server do
+      sock = server.accept
+      begin
+        sock.print("* OK test server\r\n")
+        sock.gets
+        sock.print("RUBY0001 BUG unhandled command\r\n")
+      ensure
+        sock.close
+        server.close
+      end
+    end
+    begin
+      imap = yield(port)
     ensure
       imap.disconnect if imap && !imap.disconnected?
     end

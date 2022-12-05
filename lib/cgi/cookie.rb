@@ -1,5 +1,5 @@
 # frozen_string_literal: true
-require 'cgi/util'
+require_relative 'util'
 class CGI
   # Class representing an HTTP cookie.
   #
@@ -165,7 +165,6 @@ class CGI
       raw_cookie.split(/;\s?/).each do |pairs|
         name, values = pairs.split('=',2)
         next unless name and values
-        name = CGI.unescape(name)
         values ||= ""
         values = values.split('&').collect{|v| CGI.unescape(v,@@accept_charset) }
         if cookies.has_key?(name)

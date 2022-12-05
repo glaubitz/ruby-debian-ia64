@@ -1457,8 +1457,11 @@ class TestRipper::ParserEvents < Test::Unit::TestCase
   def test_block_variables
     assert_equal("[fcall(proc,[],&block([],[void()]))]", parse("proc{|;y|}"))
     if defined?(Process::RLIMIT_AS)
-      assert_in_out_err(["-I#{File.dirname(__FILE__)}", "-rdummyparser"],
-                        'Process.setrlimit(Process::RLIMIT_AS,100*1024*1024); puts DummyParser.new("proc{|;y|!y}").parse',
+      dir = File.dirname(__FILE__)
+      as = (RubyVM::MJIT.enabled? ? 150 : 100) * 1024 * 1024
+      assert_in_out_err(%W(-I#{dir} -rdummyparser),
+                        "Process.setrlimit(Process::RLIMIT_AS,#{as}); "\
+                        "puts DummyParser.new('proc{|;y|!y}').parse",
                         ["[fcall(proc,[],&block([],[unary(!,ref(y))]))]"], [], '[ruby-dev:39423]')
     end
   end
@@ -1484,13 +1487,6 @@ class TestRipper::ParserEvents < Test::Unit::TestCase
     assert_equal("`$' without identifiers is not allowed as a global variable name", compile_error('$'))
   end
 
-  def test_warning_shadowing
-    fmt, *args = warning("x = 1; tap {|;x|}")
-    assert_match(/shadowing outer local variable/, fmt)
-    assert_equal("x", args[0])
-    assert_match(/x/, fmt % args)
-  end
-
   def test_warning_ignored_magic_comment
     fmt, *args = warning("1; #-*- frozen-string-literal: true -*-")
     assert_match(/ignored after any tokens/, fmt)
@@ -1501,5 +1497,11 @@ class TestRipper::ParserEvents < Test::Unit::TestCase
     fmt = nil
     assert_warn("") {fmt, = warn("\r;")}
     assert_match(/encountered/, fmt)
+  end
+
+  def test_warn_mismatched_indentations
+    fmt, tokend, tokbeg, line = assert_warning("") {break warn("if true\n  end\n")}
+    assert_match(/mismatched indentations/, fmt)
+    assert_equal(["if", "end", 1], [tokbeg, tokend, line])
   end
 end if ripper_test

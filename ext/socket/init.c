@@ -10,6 +10,10 @@
 
 #include "rubysocket.h"
 
+#ifdef _WIN32
+VALUE rb_w32_conv_from_wchar(const WCHAR *wstr, rb_encoding *enc);
+#endif
+
 VALUE rb_cBasicSocket;
 VALUE rb_cIPSocket;
 VALUE rb_cTCPSocket;
@@ -39,7 +43,15 @@ rsock_raise_socket_error(const char *reason, int error)
     if (error == EAI_SYSTEM && (e = errno) != 0)
 	rb_syserr_fail(e, reason);
 #endif
+#ifdef _WIN32
+    rb_encoding *enc = rb_default_internal_encoding();
+    VALUE msg = rb_sprintf("%s: ", reason);
+    if (!enc) enc = rb_default_internal_encoding();
+    rb_str_concat(msg, rb_w32_conv_from_wchar(gai_strerrorW(error), enc));
+    rb_exc_raise(rb_exc_new_str(rb_eSocket, msg));
+#else
     rb_raise(rb_eSocket, "%s: %s", reason, gai_strerror(error));
+#endif
 }
 
 #ifdef _WIN32
@@ -109,6 +121,7 @@ rsock_send_blocking(void *data)
 struct recvfrom_arg {
     int fd, flags;
     VALUE str;
+    size_t length;
     socklen_t alen;
     union_sockaddr buf;
 };
@@ -119,10 +132,11 @@ recvfrom_blocking(void *data)
     struct recvfrom_arg *arg = data;
     socklen_t len0 = arg->alen;
     ssize_t ret;
-    ret = recvfrom(arg->fd, RSTRING_PTR(arg->str), RSTRING_LEN(arg->str),
+    ret = recvfrom(arg->fd, RSTRING_PTR(arg->str), arg->length,
                    arg->flags, &arg->buf.addr, &arg->alen);
     if (ret != -1 && len0 < arg->alen)
         arg->alen = len0;
+
     return (VALUE)ret;
 }
 
@@ -140,7 +154,6 @@ rsock_strbuf(VALUE str, long buflen)
     } else {
 	rb_str_modify_expand(str, buflen - len);
     }
-    rb_str_set_len(str, buflen);
     return str;
 }
 
@@ -176,6 +189,7 @@ rsock_s_recvfrom(VALUE sock, int argc, VALUE *argv, enum sock_recv_type from)
     arg.fd = fptr->fd;
     arg.alen = (socklen_t)sizeof(arg.buf);
     arg.str = str;
+    arg.length = buflen;
 
     while (rb_io_check_closed(fptr),
 	   rsock_maybe_wait_fd(arg.fd),
@@ -186,9 +200,8 @@ rsock_s_recvfrom(VALUE sock, int argc, VALUE *argv, enum sock_recv_type from)
         }
     }
 
-    if (slen != RSTRING_LEN(str)) {
-	rb_str_set_len(str, slen);
-    }
+    /* Resize the string to the amount of data received */
+    rb_str_set_len(str, slen);
     rb_obj_taint(str);
     switch (from) {
       case RECV_RECV:
@@ -321,6 +334,7 @@ rsock_read_nonblock(VALUE sock, VALUE length, VALUE buf, VALUE ex)
     GetOpenFile(sock, fptr);
 
     if (len == 0) {
+	rb_str_set_len(str, 0);
 	return str;
     }
 
@@ -338,12 +352,9 @@ rsock_read_nonblock(VALUE sock, VALUE length, VALUE buf, VALUE ex)
 	    rb_syserr_fail_path(e, fptr->pathv);
 	}
     }
-    if (len != n) {
+    if (n != RSTRING_LEN(str)) {
 	rb_str_modify(str);
 	rb_str_set_len(str, n);
-	if (str != buf) {
-	    rb_str_resize(str, n);
-	}
     }
     if (n == 0) {
 	if (ex == Qfalse) return Qnil;
@@ -423,7 +434,7 @@ rsock_socket0(int domain, int type, int proto)
     static int cloexec_state = -1; /* <0: unknown, 0: ignored, >0: working */
 
     if (cloexec_state > 0) { /* common path, if SOCK_CLOEXEC is defined */
-        ret = socket(domain, type|SOCK_CLOEXEC, proto);
+        ret = socket(domain, type|SOCK_CLOEXEC|RSOCK_NONBLOCK_DEFAULT, proto);
         if (ret >= 0) {
             if (ret <= 2)
                 goto fix_cloexec;
@@ -431,7 +442,7 @@ rsock_socket0(int domain, int type, int proto)
         }
     }
     else if (cloexec_state < 0) { /* usually runs once only for detection */
-        ret = socket(domain, type|SOCK_CLOEXEC, proto);
+        ret = socket(domain, type|SOCK_CLOEXEC|RSOCK_NONBLOCK_DEFAULT, proto);
         if (ret >= 0) {
             cloexec_state = rsock_detect_cloexec(ret);
             if (cloexec_state == 0 || ret <= 2)
@@ -454,6 +465,9 @@ rsock_socket0(int domain, int type, int proto)
         return -1;
 fix_cloexec:
     rb_maygvl_fd_fix_cloexec(ret);
+    if (RSOCK_NONBLOCK_DEFAULT) {
+        rsock_make_fd_nonblock(ret);
+    }
 update_max_fd:
     rb_update_max_fd(ret);
 
@@ -468,6 +482,9 @@ rsock_socket0(int domain, int type, int proto)
     if (ret == -1)
         return -1;
     rb_fd_fix_cloexec(ret);
+    if (RSOCK_NONBLOCK_DEFAULT) {
+        rsock_make_fd_nonblock(ret);
+    }
 
     return ret;
 }
@@ -496,10 +513,29 @@ wait_connectable(int fd)
     int sockerr, revents;
     socklen_t sockerrlen;
 
-    /* only to clear pending error */
     sockerrlen = (socklen_t)sizeof(sockerr);
     if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (void *)&sockerr, &sockerrlen) < 0)
         return -1;
+
+    /* necessary for non-blocking sockets (at least ECONNREFUSED) */
+    switch (sockerr) {
+      case 0:
+        break;
+#ifdef EALREADY
+      case EALREADY:
+#endif
+#ifdef EISCONN
+      case EISCONN:
+#endif
+#ifdef ECONNREFUSED
+      case ECONNREFUSED:
+#endif
+#ifdef EHOSTUNREACH
+      case EHOSTUNREACH:
+#endif
+        errno = sockerr;
+        return -1;
+    }
 
     /*
      * Stevens book says, successful finish turn on RB_WAITFD_OUT and
@@ -601,8 +637,8 @@ rsock_connect(int fd, const struct sockaddr *sockaddr, int len, int socks)
     return status;
 }
 
-static void
-make_fd_nonblock(int fd)
+void
+rsock_make_fd_nonblock(int fd)
 {
     int flags;
 #ifdef F_GETFL
@@ -628,6 +664,9 @@ cloexec_accept(int socket, struct sockaddr *address, socklen_t *address_len,
 #ifdef HAVE_ACCEPT4
     static int try_accept4 = 1;
 #endif
+    if (RSOCK_NONBLOCK_DEFAULT) {
+        nonblock = 1;
+    }
     if (address_len) len0 = *address_len;
 #ifdef HAVE_ACCEPT4
     if (try_accept4) {
@@ -647,7 +686,7 @@ cloexec_accept(int socket, struct sockaddr *address, socklen_t *address_len,
                 rb_maygvl_fd_fix_cloexec(ret);
 #ifndef SOCK_NONBLOCK
             if (nonblock) {
-                make_fd_nonblock(ret);
+                rsock_make_fd_nonblock(ret);
             }
 #endif
             if (address_len && len0 < *address_len) *address_len = len0;
@@ -664,7 +703,7 @@ cloexec_accept(int socket, struct sockaddr *address, socklen_t *address_len,
     if (address_len && len0 < *address_len) *address_len = len0;
     rb_maygvl_fd_fix_cloexec(ret);
     if (nonblock) {
-        make_fd_nonblock(ret);
+        rsock_make_fd_nonblock(ret);
     }
     return ret;
 }
